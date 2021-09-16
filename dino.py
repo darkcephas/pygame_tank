@@ -623,8 +623,7 @@ while running:
 
     # present the draw
     pygame.display.flip()
-    print( "running frame"  + str(g_frame_idx))
-    
+
     # Try to hit 60 fps
     if has_extra_arg:
         clock.tick(25)
