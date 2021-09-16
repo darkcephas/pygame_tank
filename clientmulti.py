@@ -62,9 +62,15 @@ class ClientController:
         self.SendMsg(init_msg)
         # join and get all our previous messages
         # after joined we will consider messages user_name as echos and throw away
-        self.Sync();
-        time.sleep(0.5)
-        self.Sync();
+        got_data_about_self = True
+        while got_data_about_self:
+            got_data_about_self = False
+            print("syncing...")
+            for i in range(0, 100):
+                got_data_about_self = self.Sync() or got_data_about_self
+                time.sleep(0.01)
+       
+            
         self.is_joined = True;
         # run deterministic sim from start 
         invalidate_frame = 0;
@@ -83,22 +89,33 @@ class ClientController:
         #dont add echo messages
         if(msg.user_id == self.user_name and self.is_joined):
             #print("skip echo")
-            return
+            return False
         else:
             self.InsertMessageSorted(msg)
+        
+        return msg.user_id == self.user_name
     
     def Sync(self):
+        new_data = False
         while True:
             try:
-                temp_data = self.s.recv(4096)  # Should be ready to read
+                temp_data = self.s.recv(4096*64)  # Should be ready to read
                 if temp_data:
+                    if len(temp_data) == 0:
+                        return new_data 
+                    
                     self.recv_data += temp_data
+                else:
+                    return new_data
             except BlockingIOError:
                 temp_data = None
+                return new_data
             
-            consumed_bytes, msg = commonnetwork.FromBytesToMessage(self.recv_data);
-            if consumed_bytes:
-                self.recv_data = self.recv_data[consumed_bytes:]
-                self.AddRecvMessage(msg)
-            else:
-                return
+            while True:
+                consumed_bytes, msg = commonnetwork.FromBytesToMessage(self.recv_data);
+                if consumed_bytes:
+                    self.recv_data = self.recv_data[consumed_bytes:]
+                    new_data = self.AddRecvMessage(msg) or new_data
+                else:
+                    # get some more data
+                    break

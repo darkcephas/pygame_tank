@@ -632,7 +632,7 @@ def DrawStatus():
     global hi_score
     if hi_score < score:
         hi_score = score
-    text = font.render("Baked Score: " + str(hi_score), True,
+    text = font.render("Score: " + str(hi_score), True,
                        (128, 128, 128, 255))
     temp_rect = text.get_rect()
     temp_rect.left = 10

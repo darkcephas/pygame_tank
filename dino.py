@@ -13,25 +13,24 @@ import copy
 import sys
 import random
 import math
-
-
+import uuid
 from enum import IntEnum
 
-is_local_windows = "DESKTOP-B618OR4" == socket.gethostname()
-HOST = "192.168.0.11"
-if is_local_windows:
-    HOST = "localhost"
+
+is_raspberry = "raspberry" in socket.gethostname()
+HOST = "97.108.128.161"
 
 has_extra_arg = False
 if len(sys.argv) > 1:
     has_extra_arg = True
     
-g_user_id = socket.gethostname()
+g_user_id = str(uuid.getnode())
 if has_extra_arg:
     g_user_id += "XX"
 
 print("user_id:" + str(g_user_id))
 client_control = clientmulti.ClientController()
+
 client_control.SetupConnection( "tank" ,  g_user_id , 0, HOST)
 
 
@@ -47,12 +46,13 @@ class MsgEnum(IntEnum):
     ACTION_DOWN = 6
     ACTION_SHIELD = 7
     ACTION_FIRE = 8
+    GAME_PLAYER_TEAM = 9
 
 
 PREFIX = "/home/pi/game/"
 
 #running from dir
-if(is_local_windows):
+if(not is_raspberry):
     PREFIX = ""
 
 BUTTON_A = 0
@@ -102,7 +102,7 @@ g_holding_down_fire = 0
 player_name_images = {}
 
 
-COLOURS = ["green", "red"]
+COLOURS = ["green", "red", "white"]
 WORLD_GRID = 100
 BULLET_FLIGHT_TIME = 30 * 2
 BULLET_COOLDOWN_TIME = 2 * 30# after bullet has exploded
@@ -117,7 +117,7 @@ class PlayerState:
         self.y = 0
         self.posx = 133 * WORLD_GRID
         self.posy = 100 * WORLD_GRID
-        self.colour = "red"
+        self.colour = "white"
         self.rot_index = 0 # rotation 0-35 aka 360 degrees
         self.shield_active_frame = -10000 #
         self.health = HEALTH_MAX
@@ -223,18 +223,21 @@ def DrawSimulationState():
         screen_pos = (int(screen_pos[0]), int(screen_pos[1]))
         temp_center = (screen_pos[0]- trect.centerx , screen_pos[1] - trect.centery)
         BlitScreenCenter(temp_image, temp_center)
-        if key != g_user_id: # dont draw self name
+        side = 30
+        is_tank_in_full_view = screen_pos[0] > side and screen_pos[1] > side and (screen_pos[0] + side  < SCREEN_WIDTH)  and (screen_pos[1] + side  < SCREEN_HEIGHT )
+        if key != g_user_id and is_tank_in_full_view: # dont draw self name
             screen.blit(player_name_images[key], (screen_pos[0] + 16, screen_pos[1] -16))
         
         # shield when active
-        if(player.shield_active_frame + SHIELD_TIME >= g_frame_idx):
+        if(is_tank_in_full_view and player.shield_active_frame + SHIELD_TIME >= g_frame_idx):
             pygame.draw.circle(screen, (50,50,255,40), screen_pos, 27, 4)
         
         # rotated health bar
-        arc_radius = 20
-        arc_rect = pygame.Rect(screen_pos[0] - arc_radius, screen_pos[1] - arc_radius, arc_radius * 2,  arc_radius * 2)
-        arc_stop_angle =  ((3.14159 * player.health) / HEALTH_MAX) * 2.0
-        pygame.draw.arc(screen, (255,10,255,40), arc_rect, 0.0, arc_stop_angle, 1)
+        if is_tank_in_full_view and player.health > 0:
+            arc_radius = 20
+            arc_rect = pygame.Rect(screen_pos[0] - arc_radius, screen_pos[1] - arc_radius, arc_radius * 2,  arc_radius * 2)
+            arc_stop_angle =  ((3.14159 * player.health) / HEALTH_MAX) * 2.0
+            pygame.draw.arc(screen, (255,10,255,40), arc_rect, 0.0, arc_stop_angle, 1)
         
         # bomb is flying
         if g_frame_idx <= player.bullet_explode_frame:
@@ -311,7 +314,18 @@ def UpdateSimulationOnAction( action_msg):
         curr_player = simstate.players[action_msg.user_id]
     else:
         curr_player = CreateNewPlayer(action_msg.user_id)
-        
+
+    if(action_msg.game_action == MsgEnum.GAME_PLAYER_TEAM):
+        if action_msg.event_id == 0:
+            curr_player.colour = "red"
+            curr_player.posx = 183 * WORLD_GRID
+            curr_player.posy = 400 * WORLD_GRID
+        else:
+            curr_player.colour = "green"
+            curr_player.posx = 1350 * WORLD_GRID
+            curr_player.posy = 380 * WORLD_GRID
+            curr_player.rot_index = 18 # turn 180 degrees
+
     if(action_msg.game_action == MsgEnum.ACTION_RIGHT):
         curr_player.x =-1
         
@@ -327,8 +341,8 @@ def UpdateSimulationOnAction( action_msg):
     
     #clamp speed
     curr_player.y = max(0,min(curr_player.y,200))
-    
-    if(action_msg.game_action == MsgEnum.ACTION_FIRE and action_msg.frame_id -  curr_player.bullet_explode_frame > BULLET_COOLDOWN_TIME):
+    player_alive = curr_player.colour != "white"
+    if(player_alive and action_msg.game_action == MsgEnum.ACTION_FIRE and action_msg.frame_id -  curr_player.bullet_explode_frame > BULLET_COOLDOWN_TIME):
         held_down_time = action_msg.event_id
         curr_player.bullet_explode_frame = BULLET_FLIGHT_TIME + action_msg.frame_id
         curr_player.bullet_x_start = curr_player.posx
@@ -340,8 +354,21 @@ def UpdateSimulationOnAction( action_msg):
         if(action_msg.frame_id -  curr_player.shield_active_frame > SHIELD_COOLOFF):
             curr_player.shield_active_frame = action_msg.frame_id;
 
+g_winning_team = ""
+
 def UpdateSimulationState(iter_frame):
+    global g_winning_team
+    found_red = False
+    found_green = False
     for key, player in simstate.players.items():
+        if player.health <= 0:
+            player.colour = "white"
+
+        if player.colour == "red":
+            found_red = True
+        elif player.colour == "green":
+            found_green = True
+
         player.posy = player.posy - sin_rot[player.rot_index] * player.y;
         player.posx = player.posx - cos_rot[player.rot_index] * player.y;
         player.rot_index = (player.x + 36 + player.rot_index ) % 36
@@ -373,7 +400,14 @@ def UpdateSimulationState(iter_frame):
                     player.health-=3
             else:
                 player_other.explosion_radius = -1
-        
+    
+    
+    if found_green and not found_red:
+        g_winning_team = "green"
+    elif found_red and not found_green:
+        g_winning_team = "red"
+    elif found_green and found_red:
+        g_winning_team = "" # clear if new joining
     
     InsertSimStateAtIndex(iter_frame, simstate)
     
@@ -446,12 +480,40 @@ def reset():
     #LOOP.play(loops=-1)
 reset()
 
+g_user_color = None
+
+while True:
+    event = pygame.event.poll()
+    if event.type == pygame.QUIT:
+        exit()
+    if joystick.get_button(BUTTON_A):
+        g_user_color = RED_COLOR
+        break
+
+    if joystick.get_button(BUTTON_B):
+        g_user_color = GREEN_COLOR
+        break;
+
+    text = font.render(" Press - A for team red. B for team green." , True,
+                       (128, 128, 128, 255))
+    temp_rect = text.get_rect()
+    temp_rect.right = 320
+    temp_rect.top = 100
+    screen.blit(text, (temp_rect.x, temp_rect.y))
+    
+    pygame.display.flip()
+
 while not joystick.get_button(BUTTON_START):
     event = pygame.event.poll()
     if event.type == pygame.QUIT:
         exit()
-    screen.fill((255, 255, 0, 255))
-
+    screen.fill(g_user_color)
+    text = font.render("Wait for players then press start ..." , True,
+                       (128, 128, 128, 255))
+    temp_rect = text.get_rect()
+    temp_rect.right = 300
+    temp_rect.top = 100
+    screen.blit(text, (temp_rect.x, temp_rect.y))
     # move the sprites
     all.update()
 
@@ -459,7 +521,6 @@ while not joystick.get_button(BUTTON_START):
     all.draw(screen)
 
     # Score rendering
-
     pygame.display.flip()
 
 g_frame_idx = 0
@@ -481,7 +542,9 @@ def InsertSimStateAtIndex(at_index,  simstate):
 # 0 frame is original data
 InsertSimStateAtIndex(g_frame_idx, simstate)
 
-client_control.Sync()
+while client_control.Sync():
+    print("syncing...")
+
 ordered_msg, rollback_inclusive = client_control.GatherRecentFrames()
 client_control.ResetInvalidFrame()
 # ok run everything forward now
@@ -489,7 +552,26 @@ LatestPostFrame(ordered_msg)
 if g_frame_idx <= 0:
     g_frame_idx = 1
 
+#checks to see if this player already exists 
+is_rejoin = False
+for msg in ordered_msg:
+    if(msg.game_action == MsgEnum.GAME_POST_FRAME  and msg.user_id == g_user_id):
+        is_rejoin = True
+        break
 
+if not is_rejoin:
+    # used to propagate team decision
+    print("creating new player on team")
+    player_team_msg = commonnetwork.NetworkMessage()
+    player_team_msg.frame_id = g_frame_idx
+    player_team_msg.game_action = int(MsgEnum.GAME_PLAYER_TEAM)
+    if g_user_color == RED_COLOR:
+        player_team_msg.event_id = 0
+    else:
+        player_team_msg.event_id = 1 # green team
+    client_control.SendMsg(player_team_msg)
+
+print( "join at frame"  + str(g_frame_idx))
 CreateUserMessages(g_frame_idx)
 
 
@@ -529,9 +611,20 @@ while running:
 
     CreateUserMessages(g_frame_idx+1)
     InsertSimStateAtIndex(g_frame_idx, simstate)
+
+    # win condition
+    if g_winning_team != "":
+        text = font.render("Team " + g_winning_team + " has Won!" , True,
+                           (128, 128, 128, 255))
+        temp_rect = text.get_rect()
+        temp_rect.right = 300
+        temp_rect.top = 100
+        screen.blit(text, (temp_rect.x, temp_rect.y))
+
     # present the draw
     pygame.display.flip()
-
+    print( "running frame"  + str(g_frame_idx))
+    
     # Try to hit 60 fps
     if has_extra_arg:
         clock.tick(25)
