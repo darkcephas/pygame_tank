@@ -68,9 +68,10 @@ SCREEN_HEIGHT = 240
 RED_COLOR = (255,0, 0, 255)
 GREEN_COLOR = (0,255, 0, 255)
 BLUE_COLOR = (0,0, 255, 255)
-YELLO_COLOR = (255,255, 0, 255)
+YELLOW_COLOR = (255,255, 0, 255)
+GREY_COLOR = (128,128, 128, 255)
 
-SHIELD_TIME = 30 * 2
+SHIELD_TIME = 18
 SHIELD_COOLOFF = 30 * 7
 EXPLOSION_RAD = 60
 # reduce latency with smaller buffer
@@ -78,14 +79,11 @@ pygame.mixer.pre_init(44100, -16, 2, 2048)
 pygame.mixer.init()
 
 pygame.init()
-
 pygame.mouse.set_visible(False)
 
-#LOOP = pygame.mixer.Sound(PREFIX + "POL-follow-me-short.wav")
 
 # Set up the drawing window
-screen = pygame.display.set_mode([SCREEN_WIDTH, SCREEN_HEIGHT],
-                                 pygame.DOUBLEBUF)
+screen = pygame.display.set_mode([SCREEN_WIDTH, SCREEN_HEIGHT], pygame.DOUBLEBUF)
 
 # print(pygame.display.get_driver())
 # print(pygame.display.Info())
@@ -104,9 +102,9 @@ player_name_images = {}
 
 COLOURS = ["green", "red", "white"]
 WORLD_GRID = 100
-BULLET_FLIGHT_TIME = 30 * 2
-BULLET_COOLDOWN_TIME = 2 * 30# after bullet has exploded
-BULLET_EXPLODING_TIME = 30
+BULLET_FLIGHT_TIME = 15
+BULLET_COOLDOWN_TIME = 1 * 30# after bullet has exploded
+BULLET_EXPLODING_TIME = 18
 HEALTH_MAX = 100
 g_map_image = pygame.image.load(PREFIX + "tank_map.png")
 
@@ -212,8 +210,8 @@ def DrawSimulationState():
         screen_pos_cam =  (screen_pos_user[0] - g_cam_loc[0], screen_pos_user[1] -g_cam_loc[1])
         screen_bomb_cam = (screen_pos_cam[0] - cos_rot[player_own.rot_index] * g_holding_down_fire, screen_pos_cam[1] - sin_rot[player_own.rot_index] * g_holding_down_fire)
         screen_bomb_cam = (int(screen_bomb_cam[0]), int(screen_bomb_cam[1]))
-        pygame.draw.line(screen, (128,128,128,128), screen_pos_cam, screen_bomb_cam)
-        pygame.draw.circle(screen, (128,128,128,128), screen_bomb_cam, 13, 1)
+        pygame.draw.line(screen, GREY_COLOR, screen_pos_cam, screen_bomb_cam)
+        pygame.draw.circle(screen, GREY_COLOR, screen_bomb_cam, 13, 1)
     
     for key, player in simstate.players.items():
         temp_image = g_tank_images[player.colour][player.rot_index]
@@ -252,13 +250,22 @@ def DrawSimulationState():
             explodey = int( player.bullet_y_end// WORLD_GRID - g_cam_loc[1])
             rad_exp = int( player.explosion_radius// WORLD_GRID)
             pygame.draw.circle(screen, (0,0,0,255), (explodex,explodey), rad_exp, 1)
-            pygame.draw.circle(screen, YELLO_COLOR, (explodex,explodey), rad_exp+ 2, 2)
+            pygame.draw.circle(screen, YELLOW_COLOR, (explodex,explodey), rad_exp+ 2, 2)
             pygame.draw.circle(screen, (0,0,0,255), (explodex,explodey), rad_exp+3, 1)
+    
+    # win condition
+    if g_winning_team != "":
+        text = font.render("Team " + g_winning_team + " has Won!" , True, GREY_COLOR)
+        temp_rect = text.get_rect()
+        temp_rect.right = 300
+        temp_rect.top = 100
+        screen.blit(text, (temp_rect.x, temp_rect.y))
+
     
 def CreateNewPlayer(user_id):
     global simstate
     simstate.players[user_id] = PlayerState()
-    name_text = font.render(user_id, True, (128, 128, 128, 70))
+    name_text = font.render(user_id, True, GREY_COLOR)
     player_name_images[user_id] = name_text;
     return simstate.players[user_id]
 
@@ -380,7 +387,7 @@ def UpdateSimulationState(iter_frame):
             is_burning_ground = True
         elif GREEN_COLOR == map_below_col and player.colour == "red":
             is_burning_ground = True
-        elif YELLO_COLOR == map_below_col:
+        elif YELLOW_COLOR == map_below_col:
             is_burning_ground = True
         
         is_shield_active = player.shield_active_frame + SHIELD_TIME >= iter_frame
@@ -397,7 +404,7 @@ def UpdateSimulationState(iter_frame):
                 dist_sq = dist_x * dist_x  + dist_y * dist_y
                 
                 if dist_sq <= (player_other.explosion_radius* player_other.explosion_radius) and not is_shield_active:
-                    player.health-=3
+                    player.health-=7
             else:
                 player_other.explosion_radius = -1
     
@@ -435,19 +442,23 @@ def UpdateSimulation(msg_list, rollback_frame, curr_frame):
     iter_frame = rollback_frame
     no_future = True
     for msg in reversed(msg_list[0:start_from]):
+        if msg.frame_id > curr_frame:
+            print("messages from the future. Accounted for!")
+            if  msg.game_action == MsgEnum.GAME_POST_FRAME:
+                print("Why didnt we update to this frame?")
+            UpdateSimulationState(iter_frame)
+            no_future = False
+            break
+
+        if msg.frame_id < rollback_frame:
+            continue
+
         if iter_frame != msg.frame_id:
             UpdateSimulationState(iter_frame)
             iter_frame = msg.frame_id
-            
-        if msg.frame_id > curr_frame:
-            print("messages from the future. Accounted for!")
-            no_future = False
-            if  msg.game_action == MsgEnum.GAME_POST_FRAME:
-                print("Why didnt we update to this frame?")
-        
-        if msg.frame_id >= rollback_frame:
-            # delta update for this one message
-            UpdateSimulationOnAction( msg)
+
+        # delta update for this one message
+        UpdateSimulationOnAction( msg)
 
     #handle last frame update
     if no_future:
@@ -482,46 +493,7 @@ reset()
 
 g_user_color = None
 
-while True:
-    event = pygame.event.poll()
-    if event.type == pygame.QUIT:
-        exit()
-    if joystick.get_button(BUTTON_A):
-        g_user_color = RED_COLOR
-        break
 
-    if joystick.get_button(BUTTON_B):
-        g_user_color = GREEN_COLOR
-        break;
-
-    text = font.render(" Press - A for team red. B for team green." , True,
-                       (128, 128, 128, 255))
-    temp_rect = text.get_rect()
-    temp_rect.right = 320
-    temp_rect.top = 100
-    screen.blit(text, (temp_rect.x, temp_rect.y))
-    
-    pygame.display.flip()
-
-while not joystick.get_button(BUTTON_START):
-    event = pygame.event.poll()
-    if event.type == pygame.QUIT:
-        exit()
-    screen.fill(g_user_color)
-    text = font.render("Wait for players then press start ..." , True,
-                       (128, 128, 128, 255))
-    temp_rect = text.get_rect()
-    temp_rect.right = 300
-    temp_rect.top = 100
-    screen.blit(text, (temp_rect.x, temp_rect.y))
-    # move the sprites
-    all.update()
-
-    # draw the sprites
-    all.draw(screen)
-
-    # Score rendering
-    pygame.display.flip()
 
 g_frame_idx = 0
 
@@ -538,6 +510,26 @@ def InsertSimStateAtIndex(at_index,  simstate):
         saved_sim.insert(len(saved_sim) , None)
     
     saved_sim.insert(at_index, copy.deepcopy(simstate))
+
+while True:
+    event = pygame.event.poll()
+    if event.type == pygame.QUIT:
+        exit()
+    if joystick.get_button(BUTTON_A):
+        g_user_color = RED_COLOR
+        break
+
+    if joystick.get_button(BUTTON_B):
+        g_user_color = GREEN_COLOR
+        break;
+
+    text = font.render(" Press - A for team red. B for team green." , True,  GREY_COLOR)
+    temp_rect = text.get_rect()
+    temp_rect.right = 320
+    temp_rect.top = 100
+    screen.blit(text, (temp_rect.x, temp_rect.y))
+    
+    pygame.display.flip()
 
 # 0 frame is original data
 InsertSimStateAtIndex(g_frame_idx, simstate)
@@ -571,12 +563,31 @@ if not is_rejoin:
         player_team_msg.event_id = 1 # green team
     client_control.SendMsg(player_team_msg)
 
+
+while not joystick.get_button(BUTTON_START):
+    event = pygame.event.poll()
+    if event.type == pygame.QUIT:
+        exit()
+    screen.fill(g_user_color)
+    text = font.render("Wait for players then press start ..." , True, GREY_COLOR)
+    temp_rect = text.get_rect()
+    temp_rect.right = 300
+    temp_rect.top = 100
+    screen.blit(text, (temp_rect.x, temp_rect.y))
+    # move the sprites
+    all.update()
+
+    # draw the sprites
+    all.draw(screen)
+
+    # Score rendering
+    pygame.display.flip()
+
+
 print( "join at frame"  + str(g_frame_idx))
 CreateUserMessages(g_frame_idx)
 
-
 while running:
-    #print( "frame counter " + str(g_frame_idx))
     event = pygame.event.poll()
     if event.type == pygame.QUIT:
         running = False
@@ -587,19 +598,12 @@ while running:
     if joystick.get_button(BUTTON_SELECT):
         running = False
 
-    screen.fill((255, 255 , 255, 255))
-
-    # if random.randint(1, 150) == 25:
-    #   all.add(Fireworks(), layer = 1)
-    
     #simulate flaky network
     if random.random() >= 0.05:
         client_control.Sync()
-#  if random.randint(1, 100) < 5:
-#    all.add(Fuchsia(), layer = 1)
+
     ordered_msg, rollback_inclusive = client_control.GatherRecentFrames()
-    #client_control.ResetInvalidFrame()
-    LatestPostFrame(ordered_msg) # updates our frame counter
+    LatestPostFrame(ordered_msg) # updates our g_frame_idx
     UpdateSimulation(ordered_msg, rollback_inclusive,g_frame_idx )
     # move the sprites
     all.update()
@@ -610,17 +614,7 @@ while running:
     # Start sequence rendering
 
     CreateUserMessages(g_frame_idx+1)
-    InsertSimStateAtIndex(g_frame_idx, simstate)
-
-    # win condition
-    if g_winning_team != "":
-        text = font.render("Team " + g_winning_team + " has Won!" , True,
-                           (128, 128, 128, 255))
-        temp_rect = text.get_rect()
-        temp_rect.right = 300
-        temp_rect.top = 100
-        screen.blit(text, (temp_rect.x, temp_rect.y))
-
+    # InsertSimStateAtIndex(g_frame_idx, simstate)
     # present the draw
     pygame.display.flip()
 
